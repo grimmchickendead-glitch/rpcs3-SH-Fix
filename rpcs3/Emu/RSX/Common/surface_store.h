@@ -62,6 +62,9 @@ namespace rsx
 
 		rsx::surface_raster_type m_active_raster_type = rsx::surface_raster_type::linear;
 
+		// Address bound as both color and a read-only depth view of the same memory, 0 if none
+		u32 m_zeta_alias_address = 0;
+
 	public:
 		rsx::simple_array<u8> m_bound_render_target_ids = {};
 		std::array<std::pair<u32, surface_type>, 4> m_bound_render_targets = {};
@@ -586,7 +589,21 @@ namespace rsx
 
 			// Remove and preserve if possible any overlapping/replaced surface from the other pool
 			auto aliased_surface = secondary_storage->find(address);
-			if (aliased_surface != secondary_storage->end())
+			if (aliased_surface != secondary_storage->end() && address == m_zeta_alias_address) [[unlikely]]
+			{
+				// Color and depth views of the same memory are bound together. The other view stays alive and bound.
+				// Color inherits the memory contents if they are newer. Depth keeps the contents it already has to test against.
+				const bool inherit = !depth || store;
+				if (inherit && Traits::surface_is_pitch_compatible(aliased_surface->second, pitch))
+				{
+					auto surface = Traits::get(aliased_surface->second);
+					if (!old_surface || old_surface->last_use_tag < surface->last_use_tag)
+					{
+						old_surface = surface;
+					}
+				}
+			}
+			else if (aliased_surface != secondary_storage->end())
 			{
 				if (Traits::surface_is_pitch_compatible(aliased_surface->second, pitch))
 				{
@@ -1019,6 +1036,7 @@ namespace rsx
 			surface_raster_type raster_type,
 			const std::array<u32, 4> &surface_addresses, u32 address_z,
 			const std::array<u32, 4> &surface_pitch, u32 zeta_pitch,
+			bool zeta_is_read_only_alias,
 			const rsx::surface_scaling_config_t& scaling_config,
 			Args&&... extra_params)
 		{
@@ -1028,6 +1046,9 @@ namespace rsx
 			cache_tag = rsx::get_shared_tag();
 			m_invalidate_on_write = (antialias != rsx::surface_antialiasing::center_1_sample);
 			m_active_raster_type = raster_type;
+
+			// Color and depth views of the same memory are bound together when depth/stencil is only tested
+			m_zeta_alias_address = (zeta_is_read_only_alias && address_z) ? address_z : 0;
 
 			// Make previous RTTs sampleable
 			for (const auto& i : m_bound_render_target_ids)
@@ -1163,15 +1184,21 @@ namespace rsx
 
 		surface_type get_surface_at(u32 address)
 		{
-			auto It = m_render_targets_storage.find(address);
-			if (It != m_render_targets_storage.end())
-				return Traits::get(It->second);
+			surface_type color = nullptr, depth = nullptr;
 
-			auto _It = m_depth_stencil_storage.find(address);
-			if (_It != m_depth_stencil_storage.end())
-				return Traits::get(_It->second);
+			if (auto It = m_render_targets_storage.find(address); It != m_render_targets_storage.end())
+				color = Traits::get(It->second);
 
-			return nullptr;
+			if (auto It = m_depth_stencil_storage.find(address); It != m_depth_stencil_storage.end())
+				depth = Traits::get(It->second);
+
+			if (color && depth)
+			{
+				// Color and depth views of the same memory. The newest one owns the data.
+				return (depth->last_use_tag > color->last_use_tag) ? depth : color;
+			}
+
+			return color ? color : depth;
 		}
 
 		// Workaround to handle overlapping surfaces with differing pitch
@@ -1242,7 +1269,7 @@ namespace rsx
 		 */
 		void invalidate_surface_address(u32 addr, bool depth)
 		{
-			if (address_is_bound(addr))
+			if (address_is_bound(addr, depth))
 			{
 				rsx_log.error("Cannot invalidate a currently bound render target!");
 				return;
@@ -1282,6 +1309,43 @@ namespace rsx
 			}
 
 			return (m_bound_depth_stencil.first == address);
+		}
+
+		inline bool address_is_bound(u32 address, bool depth) const
+		{
+			ensure(address);
+			if (depth)
+			{
+				return (m_bound_depth_stencil.first == address);
+			}
+
+			for (const auto& index : m_bound_render_target_ids)
+			{
+				if (m_bound_render_targets[index].first == address)
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		inline bool surface_is_bound(surface_type surface) const
+		{
+			if (surface->is_depth_surface())
+			{
+				return (m_bound_depth_stencil.second == surface);
+			}
+
+			for (const auto& index : m_bound_render_target_ids)
+			{
+				if (m_bound_render_targets[index].second == surface)
+				{
+					return true;
+				}
+			}
+
+			return false;
 		}
 
 		template <typename commandbuffer_type>
@@ -1523,6 +1587,7 @@ namespace rsx
 
 			ensure(m_active_memory_used == 0);
 
+			m_zeta_alias_address = 0;
 			m_bound_depth_stencil = std::make_pair(0, nullptr);
 			m_bound_render_target_ids.clear();
 			for (auto &rtt : m_bound_render_targets)
@@ -1612,7 +1677,7 @@ namespace rsx
 							surface->memory_barrier(cmd, rsx::surface_access::memory_read);
 						}
 					}
-					else if (!surface->test())
+					else if (!surface->test() && !surface_is_bound(surface))
 					{
 						// Remove this
 						invalidate(It->second);

@@ -143,6 +143,7 @@ void GLGSRender::init_buffers(rsx::framebuffer_creation_context context, bool /*
 		m_framebuffer_layout.target, m_framebuffer_layout.aa_mode, m_framebuffer_layout.raster_type,
 		m_framebuffer_layout.color_addresses, m_framebuffer_layout.zeta_address,
 		m_framebuffer_layout.actual_color_pitch, m_framebuffer_layout.actual_zeta_pitch,
+		m_zeta_is_read_only_alias,
 		resolution_scaling_config);
 
 	std::array<GLuint, 4> color_targets;
@@ -205,6 +206,12 @@ void GLGSRender::init_buffers(rsx::framebuffer_creation_context context, bool /*
 		m_depth_surface_info.samples = samples;
 
 		m_gl_texture_cache.notify_surface_changed(m_depth_surface_info.get_memory_range(m_framebuffer_layout.aa_factors));
+
+		if (m_zeta_is_read_only_alias)
+		{
+			// Read-only view of memory owned by the aliased color target, which handles its protection and flushing
+			m_depth_surface_info.pitch = 0;
+		}
 	}
 	else
 	{

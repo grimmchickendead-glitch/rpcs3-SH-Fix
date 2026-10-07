@@ -1082,15 +1082,6 @@ namespace rsx
 
 		if (!serialized) method_registers.init();
 
-		// Titles known to require color to win when color and depth targets alias each other
-		// Starhawk: The G-buffer pass aliases color with the bound depth buffer while depth test is enabled and depth write is disabled.
-		// Resolving to depth drops the color writes, rendering lit surfaces, characters and the sky black.
-		m_title_prefers_color_aliasing = std::ranges::contains(std::array<std::string_view, 8>
-		{
-			"BCUS98181", "BCES00907", "BCES01234", "BCJS30076", "BCAS20171", "BCKS10215", // Disc
-			"NPEA00410", "NPUA70210", // PSN, Demo
-		}, Emu.GetTitleID());
-
 		rsx::overlays::reset_performance_overlay();
 		rsx::overlays::reset_debug_overlay();
 
@@ -1461,9 +1452,22 @@ namespace rsx
 		return rsx::get_address(offset_zeta, m_context_dma_z);
 	}
 
+	bool thread::can_bind_zeta_as_read_only_alias(rsx::framebuffer_creation_context context, const framebuffer_layout& layout, u32 color_index) const
+	{
+		// Only draws can test against the aliased depth buffer without writing to it. Depth and color must not both be written.
+		return g_cfg.video.fb_aliasing_bias == framebuffer_aliasing_bias::_auto &&
+			context == rsx::framebuffer_creation_context::context_draw &&
+			layout.color_write_enabled[color_index] &&
+			!layout.zeta_write_enabled;
+	}
+
 	void thread::get_framebuffer_layout(rsx::framebuffer_creation_context context, framebuffer_layout &layout)
 	{
 		layout = {};
+
+		const bool was_read_only_alias = m_zeta_is_read_only_alias;
+		m_zeta_aliased_color_mask = 0;
+		m_zeta_is_read_only_alias = false;
 
 		layout.ignore_change = true;
 		layout.width = rsx::method_registers.surface_clip_width();
@@ -1741,11 +1745,22 @@ namespace rsx
 
 				m_graphics_state.set(rsx::rtt_config_contested);
 
-				const auto aliasing_bias = g_cfg.video.fb_aliasing_bias.get();
-				const bool prefer_color = aliasing_bias == framebuffer_aliasing_bias::prefer_color ||
-					(aliasing_bias == framebuffer_aliasing_bias::_auto && m_title_prefers_color_aliasing);
+				// Both views can only be bound together if they describe the memory with the same layout
+				const u32 aliased_color_pitch = packed_render ? (layout.width * color_texel_size) : layout.color_pitch[index];
+				const bool views_compatible = (color_texel_size == depth_texel_size && aliased_color_pitch == layout.actual_zeta_pitch);
+				if (views_compatible)
+				{
+					m_zeta_aliased_color_mask |= (1u << index);
+				}
 
-				if (prefer_color
+				const auto aliasing_bias = g_cfg.video.fb_aliasing_bias.get();
+				if (views_compatible && can_bind_zeta_as_read_only_alias(context, layout, index))
+				{
+					// Color writes and depth/stencil reads target the same memory, e.g a G-buffer pass reusing the Z-prepass buffer (Starhawk).
+					// Bind both views. The depth view keeps the contents it had for testing while the color view takes ownership of the memory.
+					m_zeta_is_read_only_alias = true;
+				}
+				else if (aliasing_bias == framebuffer_aliasing_bias::prefer_color
 					&& layout.color_write_enabled[index]
 					&& !layout.zeta_write_enabled)
 				{
@@ -1785,6 +1800,12 @@ namespace rsx
 			m_graphics_state.set(rsx::rtt_config_valid);
 		}
 
+		if (!layout.zeta_address)
+		{
+			// Depth was dropped while resolving another aliased color target
+			m_zeta_is_read_only_alias = false;
+		}
+
 		if (!m_graphics_state.test(rsx::rtt_config_valid) && !layout.zeta_address)
 		{
 			rsx_log.warning("Framebuffer setup failed. Draw calls may have been lost");
@@ -1820,6 +1841,13 @@ namespace rsx
 			if (layout.zeta_address)
 			{
 				layout.zeta_address += (layout.actual_zeta_pitch * window_offset_y) + (depth_texel_size * window_offset_x);
+			}
+
+			if (m_zeta_is_read_only_alias && !std::ranges::contains(layout.color_addresses, layout.zeta_address))
+			{
+				// Color and depth no longer start at the same address. Overlap is handled by the surface cache as usual.
+				m_zeta_aliased_color_mask = 0;
+				m_zeta_is_read_only_alias = false;
 			}
 		}
 
@@ -1869,7 +1897,8 @@ namespace rsx
 			if (layout.zeta_address == m_depth_surface_info.address &&
 				layout.depth_format == m_depth_surface_info.depth_format &&
 				sample_count == m_depth_surface_info.samples &&
-				(!layout.zeta_address || (m_depth_surface_info.width == layout.width && m_depth_surface_info.height == layout.height)))
+				(!layout.zeta_address || (m_depth_surface_info.width == layout.width && m_depth_surface_info.height == layout.height)) &&
+				m_zeta_is_read_only_alias == was_read_only_alias)
 			{
 				// Same target is reused
 				return;
@@ -1976,6 +2005,24 @@ namespace rsx
 			return false;
 		};
 
+		auto evaluate_zeta_alias_contested = [&]()
+		{
+			if (!m_zeta_aliased_color_mask) [[likely]]
+			{
+				return false;
+			}
+
+			// Color shares memory with the depth buffer. Check if both views can still be bound together.
+			bool can_alias = false;
+			for (u32 index = 0; index < rsx::limits::color_buffers_count && !can_alias; ++index)
+			{
+				can_alias = (m_zeta_aliased_color_mask & (1u << index)) &&
+					can_bind_zeta_as_read_only_alias(m_current_framebuffer_context, m_framebuffer_layout, index);
+			}
+
+			return can_alias != m_zeta_is_read_only_alias;
+		};
+
 		switch (opt)
 		{
 		case NV4097_SET_DEPTH_TEST_ENABLE:
@@ -1984,7 +2031,7 @@ namespace rsx
 		{
 			evaluate_depth_buffer_state();
 
-			if (m_graphics_state.test(rsx::rtt_config_contested) && evaluate_depth_buffer_contested())
+			if (m_graphics_state.test(rsx::rtt_config_contested) && (evaluate_depth_buffer_contested() || evaluate_zeta_alias_contested()))
 			{
 				m_graphics_state.set(rsx::rtt_config_dirty);
 			}
@@ -2009,7 +2056,7 @@ namespace rsx
 				evaluate_stencil_buffer_state();
 			}
 
-			if (m_graphics_state.test(rsx::rtt_config_contested) && evaluate_depth_buffer_contested())
+			if (m_graphics_state.test(rsx::rtt_config_contested) && (evaluate_depth_buffer_contested() || evaluate_zeta_alias_contested()))
 			{
 				m_graphics_state.set(rsx::rtt_config_dirty);
 			}
@@ -2032,9 +2079,9 @@ namespace rsx
 				}
 
 				const auto new_state = evaluate_color_buffer_state();
-				if (!old_state && new_state)
+				if ((!old_state && new_state) || evaluate_zeta_alias_contested())
 				{
-					// Color buffers now in use
+					// Color buffers now in use, or the aliased color target changed its write state
 					m_graphics_state.set(rsx::rtt_config_dirty);
 				}
 			}

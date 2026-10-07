@@ -143,7 +143,10 @@ namespace rsx
 		rsx::gcm_framebuffer_info m_surface_info[rsx::limits::color_buffers_count];
 		rsx::gcm_framebuffer_info m_depth_surface_info;
 		framebuffer_layout m_framebuffer_layout{};
-		bool m_title_prefers_color_aliasing = false; // Auto framebuffer aliasing bias resolves to prefer_color for this title
+
+		// Color/depth aliasing state of the current framebuffer layout. Recomputed with the layout, not serialized.
+		u8 m_zeta_aliased_color_mask = 0;       // Color targets that share their address and layout with the depth buffer
+		bool m_zeta_is_read_only_alias = false; // The aliased color and depth views are both bound, depth/stencil is only tested
 
 		// Overlays
 		rsx::overlays::display_manager* m_overlay_manager = nullptr;
@@ -264,6 +267,7 @@ namespace rsx
 		u32 get_zeta_surface_address() const;
 
 	protected:
+		bool can_bind_zeta_as_read_only_alias(rsx::framebuffer_creation_context context, const framebuffer_layout& layout, u32 color_index) const;
 		void get_framebuffer_layout(rsx::framebuffer_creation_context context, framebuffer_layout &layout);
 		bool get_scissor(areau& region, bool clip_viewport);
 

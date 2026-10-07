@@ -2914,7 +2914,7 @@ namespace rsx
 
 					// Sanity checks
 					const bool gcm_format_is_depth = helpers::is_gcm_depth_format(attr.gcm_format);
-					const bool bound_surface_is_depth = surface_cache.m_bound_depth_stencil.first == attr.address;
+					const bool bound_surface_is_depth = surface_cache.m_bound_depth_stencil.second == result.second;
 					if (!gcm_format_is_depth && bound_surface_is_depth)
 					{
 						// While the copy routines can perform a typeless cast, prefer to not cross the aspect barrier if possible
