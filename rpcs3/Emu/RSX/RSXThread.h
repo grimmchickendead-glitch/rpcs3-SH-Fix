@@ -55,6 +55,14 @@ namespace rsx
 		context_clear_all = context_clear_color | context_clear_depth
 	};
 
+	// How a color target sharing its address with the depth buffer is resolved
+	enum class zeta_alias_mode : u8
+	{
+		keep_depth = 0,
+		keep_color,
+		keep_both, // Both views are bound, depth/stencil is only tested
+	};
+
 	enum eng_interrupt_reason : u32
 	{
 		backend_interrupt       = 0x0001,        // Backend-related interrupt
@@ -145,8 +153,10 @@ namespace rsx
 		framebuffer_layout m_framebuffer_layout{};
 
 		// Color/depth aliasing state of the current framebuffer layout. Recomputed with the layout, not serialized.
-		u8 m_zeta_aliased_color_mask = 0;       // Color targets that share their address and layout with the depth buffer
-		bool m_zeta_is_read_only_alias = false; // The aliased color and depth views are both bound, depth/stencil is only tested
+		u8 m_zeta_aliased_color_mask = 0;                     // Color targets that share their address with the depth buffer
+		u8 m_zeta_alias_compatible_mask = 0;                  // Aliased color targets that describe the memory with the same layout as the depth buffer
+		std::array<zeta_alias_mode, 4> m_zeta_alias_modes{}; // How each aliased color target was resolved
+		bool m_zeta_is_read_only_alias = false;               // The aliased color and depth views are both bound, depth/stencil is only tested
 
 		// Overlays
 		rsx::overlays::display_manager* m_overlay_manager = nullptr;
@@ -267,7 +277,7 @@ namespace rsx
 		u32 get_zeta_surface_address() const;
 
 	protected:
-		bool can_bind_zeta_as_read_only_alias(rsx::framebuffer_creation_context context, const framebuffer_layout& layout, u32 color_index) const;
+		zeta_alias_mode get_zeta_alias_mode(rsx::framebuffer_creation_context context, const framebuffer_layout& layout, u32 color_index, bool views_compatible) const;
 		void get_framebuffer_layout(rsx::framebuffer_creation_context context, framebuffer_layout &layout);
 		bool get_scissor(areau& region, bool clip_viewport);
 
