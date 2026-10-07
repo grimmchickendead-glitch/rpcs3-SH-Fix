@@ -2540,8 +2540,14 @@ namespace rsx
 			// Fast lookup for cyclic reference
 			if (m_rtts.address_is_bound(attr.address)) [[unlikely]]
 			{
-				if (auto texptr = m_rtts.get_surface_at(attr.address);
-					helpers::check_framebuffer_resource(texptr, attr, extended_dimension))
+				auto texptr = m_rtts.get_surface_at(attr.address);
+				if (auto view = m_rtts.get_aliased_view_at(attr.address, helpers::is_gcm_depth_format(attr.gcm_format)))
+				{
+					// Color and depth views of this memory are both bound. Sample the one matching the texture format.
+					texptr = view;
+				}
+
+				if (helpers::check_framebuffer_resource(texptr, attr, extended_dimension))
 				{
 					const bool force_convert = !render_target_format_is_compatible(texptr, attr.gcm_format);
 

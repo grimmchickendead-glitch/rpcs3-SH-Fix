@@ -630,8 +630,10 @@ namespace rsx
 					// This is highly unlikely but is possible in theory
 					old_surface = nullptr;
 				}
-				else if (old_surface->last_use_tag >= write_tag)
+				else if (old_surface->last_use_tag >= write_tag && new_surface->old_contents.empty())
 				{
+					// NOTE: A surface kept bound with an aliased view of the other aspect may still have pending contents.
+					// Those are merged through the intersection test instead.
 					const auto new_area = new_surface->get_normalized_memory_area();
 					const auto old_area = old_surface->get_normalized_memory_area();
 
@@ -1328,6 +1330,30 @@ namespace rsx
 			}
 
 			return false;
+		}
+
+		// Color and depth views of the same memory can be bound together. Returns the bound view of the requested aspect at the address if so.
+		surface_type get_aliased_view_at(u32 address, bool depth) const
+		{
+			if (!m_zeta_alias_address || address != m_zeta_alias_address)
+			{
+				return nullptr;
+			}
+
+			if (depth)
+			{
+				return m_bound_depth_stencil.second;
+			}
+
+			for (const auto& index : m_bound_render_target_ids)
+			{
+				if (m_bound_render_targets[index].first == address)
+				{
+					return m_bound_render_targets[index].second;
+				}
+			}
+
+			return nullptr;
 		}
 
 		inline bool surface_is_bound(surface_type surface) const
