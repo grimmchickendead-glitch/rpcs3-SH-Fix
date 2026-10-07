@@ -3,7 +3,7 @@ RPCS3 – Starhawk fix fork
 
 This is a fork of [RPCS3](https://github.com/RPCS3/rpcs3) that fixes the broken lighting in **Starhawk** (2012). It follows upstream RPCS3 and only changes how the renderer handles a color target and a depth buffer that share the same memory.
 
-The fork is based on upstream RPCS3 commit `925fbb260`. Everything below the line further down is the original RPCS3 README.
+The fork started from upstream RPCS3 commit `925fbb260` and is synced with upstream from time to time. Everything below the line further down is the original RPCS3 README.
 
 ## The problem
 
@@ -59,7 +59,7 @@ All changes are in the RSX (GPU) emulation, plus one settings tooltip.
 | Vulkan / OpenGL | `rpcs3/Emu/RSX/VK/VKGSRender.cpp`, `rpcs3/Emu/RSX/GL/GLRenderTargets.cpp` | Pass the new state to the surface cache. The read-only depth view does not lock or flush memory, because the color target owns that range. |
 | UI | `rpcs3/rpcs3qt/tooltips.h` | Describes the three options. |
 
-The full history is in `git log 925fbb260..` on the fix branch. It starts with an earlier per-title workaround that forced Prefer Color for Starhawk; the proper fix replaced it.
+Run `git log --no-merges 925fbb260..` on the fix branch to list the fork's commits; it also shows any upstream commits merged in since. The history starts with an earlier per-title workaround that forced Prefer Color for Starhawk; the proper fix replaced it.
 
 ## Status and testing
 
