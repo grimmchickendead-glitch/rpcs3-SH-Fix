@@ -592,7 +592,8 @@ namespace rsx
 			if (aliased_surface != secondary_storage->end() && address == m_zeta_alias_address) [[unlikely]]
 			{
 				// Color and depth views of the same memory are bound together. The other view stays alive and bound.
-				// Color inherits the memory contents if they are newer. Depth keeps the contents it already has to test against.
+				// Color inherits the memory contents of the depth view if they are newer. A depth view reused in place keeps the contents
+				// it already has to test against, while a new or recycled one has none of its own and inherits newer color data.
 				const bool inherit = !depth || store;
 				if (inherit && Traits::surface_is_pitch_compatible(aliased_surface->second, pitch))
 				{

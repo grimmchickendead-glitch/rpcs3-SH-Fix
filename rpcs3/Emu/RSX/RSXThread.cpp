@@ -1452,6 +1452,35 @@ namespace rsx
 		return rsx::get_address(offset_zeta, m_context_dma_z);
 	}
 
+	bool thread::get_zeta_write_enabled(rsx::surface_depth_format2 depth_format) const
+	{
+		if (rsx::method_registers.depth_test_enabled() && rsx::method_registers.depth_write_enabled())
+		{
+			return true;
+		}
+
+		if (!is_depth_stencil_format(depth_format) || !rsx::method_registers.stencil_test_enabled())
+		{
+			return false;
+		}
+
+		// Check if stencil data is modified
+		auto mask = rsx::method_registers.stencil_mask();
+		bool active_write_op = (rsx::method_registers.stencil_op_zpass() != rsx::stencil_op::keep ||
+			rsx::method_registers.stencil_op_fail() != rsx::stencil_op::keep ||
+			rsx::method_registers.stencil_op_zfail() != rsx::stencil_op::keep);
+
+		if ((!mask || !active_write_op) && rsx::method_registers.two_sided_stencil_test_enabled())
+		{
+			mask |= rsx::method_registers.back_stencil_mask();
+			active_write_op |= (rsx::method_registers.back_stencil_op_zpass() != rsx::stencil_op::keep ||
+				rsx::method_registers.back_stencil_op_fail() != rsx::stencil_op::keep ||
+				rsx::method_registers.back_stencil_op_zfail() != rsx::stencil_op::keep);
+		}
+
+		return mask && active_write_op;
+	}
+
 	zeta_alias_mode thread::get_zeta_alias_mode(rsx::framebuffer_creation_context context, const framebuffer_layout& layout, u32 color_index, bool views_compatible) const
 	{
 		const auto aliasing_bias = g_cfg.video.fb_aliasing_bias.get();
@@ -1536,25 +1565,7 @@ namespace rsx
 		const bool depth_test_enabled = rsx::method_registers.depth_test_enabled();
 
 		// Check write masks
-		layout.zeta_write_enabled = (depth_test_enabled && rsx::method_registers.depth_write_enabled());
-		if (!layout.zeta_write_enabled && stencil_test_enabled)
-		{
-			// Check if stencil data is modified
-			auto mask = rsx::method_registers.stencil_mask();
-			bool active_write_op = (rsx::method_registers.stencil_op_zpass() != rsx::stencil_op::keep ||
-				rsx::method_registers.stencil_op_fail() != rsx::stencil_op::keep ||
-				rsx::method_registers.stencil_op_zfail() != rsx::stencil_op::keep);
-
-			if ((!mask || !active_write_op) && rsx::method_registers.two_sided_stencil_test_enabled())
-			{
-				mask |= rsx::method_registers.back_stencil_mask();
-				active_write_op |= (rsx::method_registers.back_stencil_op_zpass() != rsx::stencil_op::keep ||
-					rsx::method_registers.back_stencil_op_fail() != rsx::stencil_op::keep ||
-					rsx::method_registers.back_stencil_op_zfail() != rsx::stencil_op::keep);
-			}
-
-			layout.zeta_write_enabled = (mask && active_write_op);
-		}
+		layout.zeta_write_enabled = get_zeta_write_enabled(layout.depth_format);
 
 		// NOTE: surface_target_a is index 1 but is not MRT since only one surface is active
 		bool color_write_enabled = false;
@@ -2017,6 +2028,10 @@ namespace rsx
 			}
 
 			// Color shares memory with the depth buffer. Check if any aliased color target would be resolved differently now.
+			// Use the full depth/stencil write state like the framebuffer layout evaluation does.
+			auto layout = m_framebuffer_layout;
+			layout.zeta_write_enabled = get_zeta_write_enabled(layout.depth_format);
+
 			for (u32 index = 0; index < rsx::limits::color_buffers_count; ++index)
 			{
 				if (!(m_zeta_aliased_color_mask & (1u << index)))
@@ -2025,7 +2040,17 @@ namespace rsx
 				}
 
 				const bool views_compatible = !!(m_zeta_alias_compatible_mask & (1u << index));
-				if (get_zeta_alias_mode(m_current_framebuffer_context, m_framebuffer_layout, index, views_compatible) != m_zeta_alias_modes[index])
+				const auto new_mode = get_zeta_alias_mode(m_current_framebuffer_context, layout, index, views_compatible);
+				const auto old_mode = m_zeta_alias_modes[index];
+
+				if (new_mode == old_mode)
+				{
+					continue;
+				}
+
+				// The depth-biased heuristic never re-evaluated a resolved alias on its own. Keep it that way so Prefer Depth stays the previous behavior.
+				if (new_mode == zeta_alias_mode::keep_both || old_mode == zeta_alias_mode::keep_both ||
+					g_cfg.video.fb_aliasing_bias == framebuffer_aliasing_bias::prefer_color)
 				{
 					return true;
 				}
@@ -2041,12 +2066,6 @@ namespace rsx
 		case NV4097_SET_DEPTH_FUNC:
 		{
 			evaluate_depth_buffer_state();
-
-			if (!m_framebuffer_layout.zeta_write_enabled)
-			{
-				// Stencil writes also modify the depth buffer
-				evaluate_stencil_buffer_state();
-			}
 
 			if (m_graphics_state.test(rsx::rtt_config_contested) && (evaluate_depth_buffer_contested() || evaluate_zeta_alias_contested()))
 			{

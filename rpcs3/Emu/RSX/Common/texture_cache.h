@@ -2568,6 +2568,17 @@ namespace rsx
 			rsx::simple_array<typename SurfaceStoreType::surface_overlap_info> overlapping_fbos;
 			rsx::simple_array<section_storage_type*> overlapping_locals;
 
+			auto remove_unmatched_aliased_views = [&]()
+			{
+				// Color and depth views of the same memory can be bound together. Only sample the one matching the texture format.
+				const bool depth_format = helpers::is_gcm_depth_format(attr.gcm_format);
+				overlapping_fbos.erase_if([&](const auto& e)
+				{
+					const auto view = m_rtts.get_aliased_view_at(e.base_address, depth_format);
+					return view && e.surface != view;
+				});
+			};
+
 			auto fast_fbo_check = [&]() -> sampled_image_descriptor
 			{
 				const auto& last = overlapping_fbos.back();
@@ -2599,6 +2610,7 @@ namespace rsx
 			{
 				const u32 block_h = (attr.depth * attr.slice_h);
 				overlapping_fbos = m_rtts.get_merged_texture_memory_region(cmd, attr.address, attr.width, block_h, attr.pitch, attr.bpp, rsx::surface_access::shader_read);
+				remove_unmatched_aliased_views();
 
 				if (!overlapping_fbos.empty())
 				{
@@ -2668,6 +2680,7 @@ namespace rsx
 				// Now check for surface cache hits
 				const u32 block_h = (attr.depth * attr.slice_h);
 				overlapping_fbos = m_rtts.get_merged_texture_memory_region(cmd, attr.address, attr.width, block_h, attr.pitch, attr.bpp, rsx::surface_access::shader_read);
+				remove_unmatched_aliased_views();
 			}
 
 			if (!overlapping_fbos.empty() || !overlapping_locals.empty())

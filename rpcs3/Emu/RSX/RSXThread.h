@@ -277,6 +277,7 @@ namespace rsx
 		u32 get_zeta_surface_address() const;
 
 	protected:
+		bool get_zeta_write_enabled(rsx::surface_depth_format2 depth_format) const;
 		zeta_alias_mode get_zeta_alias_mode(rsx::framebuffer_creation_context context, const framebuffer_layout& layout, u32 color_index, bool views_compatible) const;
 		void get_framebuffer_layout(rsx::framebuffer_creation_context context, framebuffer_layout &layout);
 		bool get_scissor(areau& region, bool clip_viewport);
