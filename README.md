@@ -74,6 +74,9 @@ The full history is in `git log 925fbb260..` on the fix branch. It starts with a
   - Oversized texture reads.
 
   The harness also showed that the previous behavior loses the Z-prepass depth and shows stale data for the lighting pass.
+- **Fuzzing against upstream:** randomized sequences of binds, draws, skipped draws, blits, texture reads and cleanup were run through both this fork and upstream RPCS3, also not included in this repository:
+  - 8,000 extended fuzz sequences found no crashes or inheritance cycles. Earlier versions of this fork failed 18 of them.
+  - A strict per-texel memory check over 400 sequences found one difference from upstream. It is intended: depth reads during the aliased pass return the depth view's data.
 - **Other games:** the change affects any game that renders color into its bound depth buffer while only testing depth. It has not been tested on other titles. The original heuristic (2017) was tuned with Tales of Vesperia, God of War HD and Assassin's Creed among others. If a game looks wrong only on this fork, try **Prefer Depth** and please report it.
 - **Known limitation:** the depth view may be reloaded from memory that already contains the color output in the middle of a pass. This only happens when *Read Depth Buffer* and *Write Color Buffers* are both enabled. Neither is on by default.
 
