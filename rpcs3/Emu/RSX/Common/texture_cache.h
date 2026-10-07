@@ -2578,11 +2578,17 @@ namespace rsx
 			{
 				// Color and depth views of the same memory can be bound together. Only sample the one matching the texture format.
 				const bool depth_format = helpers::is_gcm_depth_format(attr.gcm_format);
-				overlapping_fbos.erase_if([&](const auto& e)
+				const auto is_unmatched_view = [&](const auto& e)
 				{
 					const auto view = m_rtts.get_aliased_view_at(e.base_address, depth_format);
 					return view && e.surface != view;
-				});
+				};
+
+				if (overlapping_fbos.any(is_unmatched_view))
+				{
+					// NOTE: erase_if does not preserve the order of the list, which must stay sorted from oldest to newest
+					overlapping_fbos = overlapping_fbos.filter([&](const auto& e) { return !is_unmatched_view(e); });
+				}
 			};
 
 			auto fast_fbo_check = [&]() -> sampled_image_descriptor

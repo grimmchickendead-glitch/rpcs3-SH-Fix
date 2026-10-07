@@ -439,6 +439,21 @@ namespace rsx
 			}
 		}
 
+		// A depth view left behind by an aliased bind can be older than the color view it shared its memory with.
+		// If that newer surface covers it, its memory outside a new, smaller area is preserved by splitting the newer surface.
+		// Splitting it as well would only spill stale data, which can evict other surfaces at the split addresses.
+		static bool is_superseded_by(surface_type surface, surface_type other)
+		{
+			if (!other || other->last_use_tag <= surface->last_use_tag)
+			{
+				return false;
+			}
+
+			const auto this_area = surface->get_normalized_memory_area();
+			const auto other_area = other->get_normalized_memory_area();
+			return this_area.x2 <= other_area.x2 && this_area.y2 <= other_area.y2;
+		}
+
 		template <bool depth, typename format_type, typename ...Args>
 		surface_type bind_surface_address(
 			command_list_type command_list,
@@ -515,7 +530,13 @@ namespace rsx
 					if (pitch_compatible)
 					{
 						// Preserve memory outside the area to be inherited if needed
-						split_surface_region<depth>(command_list, address, Traits::get(surface), static_cast<u16>(width), static_cast<u16>(height), bpp, antialias);
+						const auto other = secondary_storage->find(address);
+						if (other == secondary_storage->end() || !Traits::surface_is_pitch_compatible(other->second, pitch) ||
+							!is_superseded_by(Traits::get(surface), Traits::get(other->second)))
+						{
+							split_surface_region<depth>(command_list, address, Traits::get(surface), static_cast<u16>(width), static_cast<u16>(height), bpp, antialias);
+						}
+
 						old_surface = Traits::get(surface);
 					}
 
@@ -604,8 +625,15 @@ namespace rsx
 						surface->read_barrier(command_list);
 					}
 
-					if (!old_surface || old_surface->last_use_tag < surface->last_use_tag)
+					if (!store && surface->last_use_tag <= new_surface->last_use_tag)
 					{
+						// A color view reused in place already holds data at least as new. Inheriting it again would only copy it back and forth.
+					}
+					else if (!old_surface || old_surface->last_use_tag < surface->last_use_tag ||
+						(depth && old_surface->last_use_tag == surface->last_use_tag))
+					{
+						// The color view is bound first and has already inherited anything newer from the depth memory it replaces.
+						// On a tie, a new depth view inherits from it instead of the smaller set of data in the replaced depth surface.
 						old_surface = surface;
 					}
 				}
@@ -615,7 +643,10 @@ namespace rsx
 				if (Traits::surface_is_pitch_compatible(aliased_surface->second, pitch))
 				{
 					auto surface = Traits::get(aliased_surface->second);
-					split_surface_region<!depth>(command_list, address, surface, static_cast<u16>(width), static_cast<u16>(height), bpp, antialias);
+					if (!is_superseded_by(surface, old_surface))
+					{
+						split_surface_region<!depth>(command_list, address, surface, static_cast<u16>(width), static_cast<u16>(height), bpp, antialias);
+					}
 
 					if (!old_surface || old_surface->last_use_tag < surface->last_use_tag)
 					{
