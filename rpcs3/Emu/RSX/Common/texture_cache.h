@@ -1486,6 +1486,12 @@ namespace rsx
 
 				for (auto It = list.rbegin(); It != list.rend(); ++It)
 				{
+					if (auto view = m_rtts.get_aliased_view_at(It->base_address, false); view && It->surface != view)
+					{
+						// Color and depth views of this memory are both bound. Transfers go through the color view, which owns the memory.
+						continue;
+					}
+
 					if (!(It->surface->memory_usage_flags & rsx::surface_usage_flags::attachment))
 					{
 						// HACK

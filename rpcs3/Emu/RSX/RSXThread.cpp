@@ -2048,6 +2048,14 @@ namespace rsx
 					continue;
 				}
 
+				if (old_mode == zeta_alias_mode::keep_both && new_mode == zeta_alias_mode::keep_depth &&
+					!layout.color_write_enabled[index] && !layout.zeta_write_enabled)
+				{
+					// The aliased color target was masked off, e.g for an occlusion query. Nothing writes to the memory, so both views stay valid.
+					// Rebinding depth alone would replace the depth contents being tested against with the color data.
+					continue;
+				}
+
 				// The depth-biased heuristic never re-evaluated a resolved alias on its own. Keep it that way so Prefer Depth stays the previous behavior.
 				if (new_mode == zeta_alias_mode::keep_both || old_mode == zeta_alias_mode::keep_both ||
 					g_cfg.video.fb_aliasing_bias == framebuffer_aliasing_bias::prefer_color)

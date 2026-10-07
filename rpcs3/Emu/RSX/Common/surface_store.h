@@ -598,6 +598,12 @@ namespace rsx
 				if (inherit && Traits::surface_is_pitch_compatible(aliased_surface->second, pitch))
 				{
 					auto surface = Traits::get(aliased_surface->second);
+					if (!surface->old_contents.empty())
+					{
+						// Resolve pending contents first so that the tag describes the data, and so that both views can never inherit from each other
+						surface->read_barrier(command_list);
+					}
+
 					if (!old_surface || old_surface->last_use_tag < surface->last_use_tag)
 					{
 						old_surface = surface;
