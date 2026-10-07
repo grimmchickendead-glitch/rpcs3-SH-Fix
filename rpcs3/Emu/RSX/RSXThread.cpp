@@ -1082,6 +1082,15 @@ namespace rsx
 
 		if (!serialized) method_registers.init();
 
+		// Titles known to require color to win when color and depth targets alias each other
+		// Starhawk: The G-buffer pass aliases color with the bound depth buffer while depth test is enabled and depth write is disabled.
+		// Resolving to depth drops the color writes, rendering lit surfaces, characters and the sky black.
+		m_title_prefers_color_aliasing = std::ranges::contains(std::array<std::string_view, 8>
+		{
+			"BCUS98181", "BCES00907", "BCES01234", "BCJS30076", "BCAS20171", "BCKS10215", // Disc
+			"NPEA00410", "NPUA70210", // PSN, Demo
+		}, Emu.GetTitleID());
+
 		rsx::overlays::reset_performance_overlay();
 		rsx::overlays::reset_debug_overlay();
 
@@ -1732,7 +1741,11 @@ namespace rsx
 
 				m_graphics_state.set(rsx::rtt_config_contested);
 
-				if (g_cfg.video.fb_aliasing_bias == framebuffer_aliasing_bias::prefer_color
+				const auto aliasing_bias = g_cfg.video.fb_aliasing_bias.get();
+				const bool prefer_color = aliasing_bias == framebuffer_aliasing_bias::prefer_color ||
+					(aliasing_bias == framebuffer_aliasing_bias::_auto && m_title_prefers_color_aliasing);
+
+				if (prefer_color
 					&& layout.color_write_enabled[index]
 					&& !layout.zeta_write_enabled)
 				{

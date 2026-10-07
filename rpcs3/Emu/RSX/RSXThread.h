@@ -143,6 +143,7 @@ namespace rsx
 		rsx::gcm_framebuffer_info m_surface_info[rsx::limits::color_buffers_count];
 		rsx::gcm_framebuffer_info m_depth_surface_info;
 		framebuffer_layout m_framebuffer_layout{};
+		bool m_title_prefers_color_aliasing = false; // Auto framebuffer aliasing bias resolves to prefer_color for this title
 
 		// Overlays
 		rsx::overlays::display_manager* m_overlay_manager = nullptr;
